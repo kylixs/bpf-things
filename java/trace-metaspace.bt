@@ -1,0 +1,25 @@
+#!/usr/local/bin/bpftrace
+// trace-metaspace.bt
+
+BEGIN
+{}
+
+//metaspace::MetaspaceArena::allocate(unsigned long)
+uprobe:/usr/lib/jvm/java-17-openjdk-amd64/lib/server/libjvm.so:*MetaspaceArena8allocateEm
+{
+    @java_pid[pid] = pid;
+}
+
+uprobe:/usr/lib/jvm/java-17-openjdk-amd64/lib/server/libjvm.so:*MetaspaceArena8allocateEm
+/@java_pid[pid]/
+{
+    //@ma_begin[pid, tid, comm, ustack] = count();
+    @vm_thread_tid[tid] = comm;
+    @vm_thread_count[tid] = count();
+    @vm_thread_alloc_size[tid] = sum(arg1);
+    printf("MetaspaceArena::allocate: pid:%-6d, thread:[%-6d]%s, size:%-6d\n", pid, tid, comm, arg1);
+}
+
+
+END
+{}

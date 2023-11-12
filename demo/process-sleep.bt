@@ -1,0 +1,19 @@
+#!/usr/local/bin/bpftrace
+
+kprobe:do_nanosleep {
+  /*以线程 tid 作为 key，不同线程的 value 不同*/
+  @start[tid] = nsecs; 
+  @proc[tid] = pid
+}
+
+kretprobe:do_nanosleep /@start[tid] != 0/ {
+  $ms = (nsecs - @start[tid]) / 1000000;
+  printf("process: %d - thread: %d slept for %d ms\n", @proc[tid], tid, $ms);
+
+  if ( $ms > 100) {
+    printf("process: %d - thread: %d: %s\nkstack:\n%s\n ustack:\n%s\n", @proc[tid], tid, comm, kstack(perf), ustack(perf));    
+  }
+
+  delete(@start[tid]); 
+  delete(@proc[tid]); 
+}

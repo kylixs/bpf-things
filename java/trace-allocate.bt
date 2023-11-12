@@ -1,0 +1,48 @@
+#!/usr/local/bin/bpftrace
+// trace-metaspace.bt
+
+struct MemAllocator {
+  size_t            _f1; // miss what?
+  size_t           _thread; //Thread*
+  size_t           _klass; //Klass*
+  size_t            _word_size;
+}
+
+struct Allocation {
+  size_t             _allocator; //const MemAllocator&
+  size_t             _thread; // JavaThread*
+  size_t             _obj_ptr; //oop*
+  bool                _overhead_limit_exceeded;
+  bool                _allocated_outside_tlab;
+  size_t              _allocated_tlab_size;
+  bool                _tlab_end_reset_for_sample;
+}
+
+BEGIN
+{}
+
+//HeapWord* MemAllocator::allocate()
+uprobe:/usr/lib/jvm/java-17-openjdk-amd64/lib/server/libjvm.so:*MemAllocator8allocateEv
+{
+    @java_pid[pid] = pid;
+}
+
+uprobe:/usr/lib/jvm/java-17-openjdk-amd64/lib/server/libjvm.so:*MemAllocator8allocateEv
+/@java_pid[pid]/
+{
+    $allocator=(struct MemAllocator*)arg0;
+    $size = ((struct MemAllocator*)arg0)->_word_size;
+    //@ma_begin[pid, tid, comm, ustack] = count();
+    @vm_thread_tid[tid] = comm;
+    @vm_thread_count[tid] = count();
+    @vm_thread_alloc_size[tid] = sum($size);
+    printf("allocate: pid:%-6d, thd:[%-6d]%s, size:%-4d\n", pid, tid, comm, $allocator->_word_size);
+    if ($allocator->_word_size > 60) {
+      system("/data/projects/trace.sh %d %d", pid, tid);
+    }
+    
+}
+
+
+END
+{}

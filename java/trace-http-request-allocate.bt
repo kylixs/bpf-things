@@ -1,0 +1,95 @@
+#!/usr/local/bin/bpftrace
+// trace-metaspace.bt
+
+struct MemAllocator {
+  size_t            _f1; // miss what?
+  size_t           _thread; //Thread*
+  size_t           _klass; //Klass*
+  size_t            _word_size;
+}
+
+struct Allocation {
+  size_t             _allocator; //const MemAllocator&
+  size_t             _thread; // JavaThread*
+  size_t             _obj_ptr; //oop*
+  bool                _overhead_limit_exceeded;
+  bool                _allocated_outside_tlab;
+  size_t              _allocated_tlab_size;
+  bool                _tlab_end_reset_for_sample;
+}
+
+BEGIN
+{}
+
+uprobe:/usr/lib/jvm/java-17-openjdk-amd64/lib/libnio.so:Java_sun_nio_ch_SocketDispatcher_read0
+{
+    @java_pid[pid] = pid;
+}
+
+/*
+ JNIEXPORT jint JNICALL
+ Java_sun_nio_ch_SocketDispatcher_read0(JNIEnv *env, jclass clazz,
+                                        jobject fdo, jlong address, jint len)
+*/                                        
+uprobe:/usr/lib/jvm/java-17-openjdk-amd64/lib/libnio.so:Java_sun_nio_ch_SocketDispatcher_read0
+/@java_pid[pid]/
+{
+    @thread[tid] = tid;
+    @thread_nio_read_count[tid] = count();
+    @thread_nio_read_buf[tid] = arg3;
+    @thread_nio_read_len[tid] = sum(arg4);
+    printf("nio_read: pid:%-6d, thd:[%-6d]%s, read:%d\n", pid, tid, comm, arg4);
+}
+
+
+
+uretprobe:/usr/lib/jvm/java-17-openjdk-amd64/lib/libnio.so:Java_sun_nio_ch_SocketDispatcher_read0
+/@java_pid[pid] && retval > 0/
+{
+    if (retval > 0) {
+      $raw = @thread_nio_read_buf[tid];
+      $buf =  str($raw);
+      if (strncmp($buf, "GET", 3)==0 || strncmp($buf, "POST", 4)==0 ) {
+        @thread_nio_read_bytes_sum[tid] = sum(retval);
+        $len = 0;
+        while ($len < retval) {
+          if ($buf[$len] == 13 || $buf[$len] == 10 ){
+            break;
+          }
+          $len ++;
+        }
+        $line = str($raw, $len);
+        
+        @thread_request_line[tid] = $line;
+        @request_line[$line] = count();
+        printf("nio_read: pid:%-6d, thd:[%-6d]%s, bytes:%-4d, req_line: \n%s\n", pid, tid, comm, retval, $line);
+      }
+      
+    }
+}
+
+
+// HeapWord* MemAllocator::allocate()
+uprobe:/usr/lib/jvm/java-17-openjdk-amd64/lib/server/libjvm.so:*MemAllocator8allocateEv
+{
+    @java_pid[pid] = pid;
+}
+
+uprobe:/usr/lib/jvm/java-17-openjdk-amd64/lib/server/libjvm.so:*MemAllocator8allocateEv
+/@java_pid[pid]/
+{
+    $allocator=(struct MemAllocator*)arg0;
+    //@ma_begin[pid, tid, comm, ustack] = count();
+    @vm_thread_name[tid] = comm;
+    @vm_thread_count[tid] = count();
+    @vm_thread_alloc_size[tid] = sum($allocator->_word_size);
+    if ($allocator->_word_size > 30) {
+      printf("allocate: pid:%-6d, thd:[%-6d]%s, size:%-4d\n", pid, tid, comm, $allocator->_word_size);
+      //system("/data/projects/trace.sh %d %d", pid, tid);
+    }
+    
+}
+
+
+END
+{}
